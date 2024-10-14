@@ -1,4 +1,7 @@
+use core::num;
+use std::ops::Add;
 use std::{any::type_name, io};
+use std::collections::HashMap;
 
 
 
@@ -14,8 +17,16 @@ struct ProcessorStatus {
 }
 
 fn log_error(tag: &str, error: &str) {
-    println!("{}: {}", tag, error);
+    println!("(ERROR) {}: {}", tag, error);
 }
+fn log_warning(tag: &str, error: &str) {
+    println!("(WARNING) {}: {}", tag, error);
+}
+fn log_info(tag: &str, error: &str) {
+    println!("(INFO) {}: {}", tag, error);
+}
+
+
 
 fn compl2_is_pos(byte: u8) -> bool {
     return byte & 0b10000000 > 0;
@@ -85,6 +96,7 @@ const STACK_ADDRESS_MSB: u16 = 0x0100;
 const ZEROPAGE_ADDRESS_MSB: u16 = 0x0000;
 const MEMORY_SIZE: usize = 0x10000;
 
+#[derive(Debug)]
 enum AddressingModes {
     Implicit,
     Accumulator,
@@ -103,6 +115,65 @@ enum AddressingModes {
     _INVALID
 }
 
+enum InstructionNames {
+    ADC, //    add with carry
+    AND, //    and (with accumulator)
+    ASL, //    arithmetic shift left
+    BCC, //    branch on carry clear
+    BCS, //    branch on carry set
+    BEQ, //    branch on equal (zero set)
+    BIT, //    bit test
+    BMI, //    branch on minus (negative set)
+    BNE, //    branch on not equal (zero clear)
+    BPL, //    branch on plus (negative clear)
+    BRK, //    break / interrupt
+    BVC, //    branch on overflow clear
+    BVS, //    branch on overflow set
+    CLC, //    clear carry
+    CLD, //    clear decimal
+    CLI, //    clear interrupt disable
+    CLV, //    clear overflow
+    CMP, //    compare (with accumulator)
+    CPX, //    compare with X
+    CPY, //    compare with Y
+    DEC, //    decrement
+    DEX, //    decrement X
+    DEY, //    decrement Y
+    EOR, //    exclusive or (with accumulator)
+    INC, //    increment
+    INX, //    increment X
+    INY, //    increment Y
+    JMP, //    jump
+    JSR, //    jump subroutine
+    LDA, //    load accumulator
+    LDX, //    load X
+    LDY, //    load Y
+    LSR, //    logical shift right
+    NOP, //    no operation
+    ORA, //    or with accumulator
+    PHA, //    push accumulator
+    PHP, //    push processor status (SR)
+    PLA, //    pull accumulator
+    PLP, //    pull processor status (SR)
+    ROL, //    rotate left
+    ROR, //    rotate right
+    RTI, //    return from interrupt
+    RTS, //    return from subroutine
+    SBC, //    subtract with carry
+    SEC, //    set carry
+    SED, //    set decimal
+    SEI, //    set interrupt disable
+    STA, //    store accumulator
+    STX, //    store X
+    STY, //    store Y
+    TAX, //    transfer accumulator to X
+    TAY, //    transfer accumulator to Y
+    TSX, //    transfer stack pointer to X
+    TXA, //    transfer X to accumulator
+    TXS, //    transfer X to stack pointer
+    TYA, //    transfer Y to accumulator
+}
+
 struct ADDRESSER {
     mode: AddressingModes,
     low_address: u16,
@@ -114,6 +185,8 @@ struct ADDRESSER {
     accumulator: bool,
     immediate: bool,
     relative: bool,
+
+    bytes_to_pull: usize,
 
 }
 
@@ -130,6 +203,7 @@ impl ADDRESSER {
         self.high_adress = 0;
         self.full_address = 0;
         self.offset = 0;
+        self.bytes_to_pull = 0;
     }
 
 
@@ -228,23 +302,29 @@ impl ADDRESSER {
             },
             AddressingModes::_INVALID => {
                 log_error("Get Address", "mode is invalid");
-
             }
         }
     }
 
-    fn deref_byte(&mut self, index: usize) -> Result<u8, io::Error> {
+    fn deref_byte(&self, index: usize) -> Result<u8, io::Error> {
         if index >= MEMORY_SIZE {
             log_error("get_memory", "Index is greater than memory");
             return Result::Err(io::Error::new(io::ErrorKind::InvalidInput, "index is greater than memory size"))
         }
         return Result::Ok(self.memory[index]);
     }
-    fn deref_word(&mut self, index: usize) -> Result<u16, io::Error> {
+    fn deref_word(&self, index: usize) -> Result<u16, io::Error> {
         let idx_plus_one = (index as u16).wrapping_add(1) as usize;
         let word: u16 = self.deref_byte(index)? as u16 + (self.deref_byte(idx_plus_one)? as u16) << 8;
 
         return Ok(word);
+    }
+    fn deref_n_bytes(&self, index: usize, num_bytes: usize) -> Result<u32, io::Error> {
+        let mut result: u32 = 0;
+        for byte in 0..num_bytes {
+            result |= (self.deref_byte(index + byte)? as u32) << (8 * byte);
+        }
+        return Ok(result);
     }
 
     fn calc_address_and_deref_byte(&mut self, low_addr: u8, high_addr: u8, full_addr: u16, offset: u8, mode: AddressingModes) -> Result<u8, io::Error> {
@@ -257,6 +337,60 @@ impl ADDRESSER {
         self.calc_address(low_addr, high_addr, full_addr, offset, mode);
         let word = self.deref_word(self.full_address as usize)?;
         return Ok(word);
+    }
+
+    fn get_opcode_arguments(&mut self, mode: AddressingModes, pc: usize, pulled_bytes: &usize) -> Result<u32, io::Error>{
+        match self.mode {
+            AddressingModes::Implicit => {
+                self.bytes_to_pull = 0;
+            },
+            AddressingModes::Accumulator => {
+                self.bytes_to_pull = 0;
+            },
+            AddressingModes::Immediate => {
+                self.bytes_to_pull = 1;
+            },
+            AddressingModes::ZeroPage => {
+                self.bytes_to_pull = 1;
+            },
+            AddressingModes::ZeroPageX => {
+                self.bytes_to_pull = 1;
+            },
+            AddressingModes::ZeroPageY => {
+                self.bytes_to_pull = 1;
+            },
+            AddressingModes::Relative => {
+                self.bytes_to_pull = 1;
+            },
+            AddressingModes::Absolute => {
+                self.bytes_to_pull = 2;
+            },
+            AddressingModes::AbsoluteX => {
+                self.bytes_to_pull = 2;
+            },
+            AddressingModes::AbsoluteY => {
+                self.bytes_to_pull = 2;
+            },
+            AddressingModes::Indirect => {
+                self.bytes_to_pull = 1;
+            },
+            AddressingModes::IndexedIndirect => {
+                self.bytes_to_pull = 1;
+            },
+            AddressingModes::IndirectIndexed => {
+                self.bytes_to_pull = 1;
+            },
+            AddressingModes::_INVALID => {
+                self.bytes_to_pull = 0;
+            }
+        }
+        if self.bytes_to_pull > 0 {
+            let args = self.deref_n_bytes(pc + 1, self.bytes_to_pull)?;
+
+            return Ok(args);
+        }
+
+        return Ok(0);
     }
 
 
@@ -273,6 +407,7 @@ struct Cpu6502 {
     idx_y: u8, //index register y
     status: ProcessorStatus,
     addresser: ADDRESSER,
+    wait_cycles: u8, //implementation shortcut: only do next instruction when this is 0 to replicate the multi-cycle instructions
 
 }
 
@@ -294,6 +429,202 @@ impl Cpu6502 {
         self.status.set_zero(self.accu == 0);
         self.status.set_overflow(compl2_is_pos(self.accu) == expected_pos);
         self.status.set_negative(!compl2_is_pos(self.accu));
+    }
+
+
+
+
+
+    fn dispatch_opcodes(&mut self) -> Result<(), io::Error> {
+
+        let tag = "dispatch_opcodes";
+
+        let opcode = self.addresser.deref_byte(self.pc as usize)?;
+
+        let hi = opcode >> 4;
+        let lo = opcode & 0xF;
+        let even_hi = hi % 2 == 0;
+
+        let mut mode: AddressingModes = AddressingModes::Implicit;
+
+        match lo {
+            0x0 => {
+                match hi {
+                    0x0 => {
+
+                    },
+                    0x1 => {
+
+                    },
+                    0x2 => {
+
+
+                    },
+                    0x3 => {
+
+
+                    },
+                    0x4 => {
+
+
+                    },
+                    0x5 => {
+
+
+                    },
+                    0x6 => {
+
+
+                    },
+                    0x7 => {
+
+
+                    },
+                    0x8 => {
+
+
+                    },
+                    0x9 => {
+
+
+                    },
+                    0xA => {
+
+
+                    },
+                    0xB => {
+
+
+                    },
+                    0xC => {
+
+                    },
+                    0xD => {
+
+
+                    },
+                    0xE => {
+
+
+                    },
+                    0xF => {
+
+
+                    },
+
+                    _ => {
+                        log_error(tag, "high-quartet above 0xF should not be possible");
+                    }
+                }
+            },
+            0x1 => {
+                if even_hi {
+                    mode = AddressingModes::IndexedIndirect;
+                } else {
+                    mode = AddressingModes::IndirectIndexed;
+                }
+            },
+            0x2 => {
+                mode = AddressingModes::Immediate;
+
+            },
+            0x3 => {
+                log_error(tag, &format!("no opcode has low quartet = 0x{:X}", lo));
+
+            },
+            0x4 => {
+                if even_hi {
+                    mode = AddressingModes::ZeroPage
+                } else {
+                    mode = AddressingModes::ZeroPageX
+                }
+
+            },
+            0x5 => {
+                if even_hi {
+                    mode = AddressingModes::ZeroPage
+                } else {
+                    mode = AddressingModes::ZeroPageX
+                }
+
+            },
+            0x6 => {
+                if even_hi {
+                    mode = AddressingModes::ZeroPage
+                } else {
+                    mode = AddressingModes::ZeroPageX
+                } //TODO: 9- and B- have ZeroPageY to be handled in inner match
+
+            },
+            0x7 => {
+                log_error(tag, &format!("no opcode has low quartet = 0x{:X}", lo));
+
+            },
+            0x8 => {
+                mode = AddressingModes::Implicit;
+
+            },
+            0x9 => {
+                if even_hi {
+                    mode = AddressingModes::Immediate
+                } else {
+                    mode = AddressingModes::AbsoluteY
+                }
+
+            },
+            0xA => {
+                if hi <=6 {
+                    mode = AddressingModes::Accumulator
+                } else {
+                    mode = AddressingModes::Implicit
+                }
+
+            },
+            0xB => {
+                log_error(tag, &format!("no opcode has low quartet = 0x{:X}", lo));
+
+            },
+            0xC => {
+                mode = AddressingModes::Absolute;
+                //TODO: 6C is indirect, BC is AbsX
+
+            },
+            0xD => {
+                if even_hi {
+                    mode = AddressingModes::Absolute
+                } else {
+                    mode = AddressingModes::AbsoluteX
+                }
+
+            },
+            0xE => {
+                if even_hi {
+                    mode = AddressingModes::Absolute
+                } else {
+                    mode = AddressingModes::AbsoluteX
+                }
+
+            },
+            0xF => {
+                log_error(tag, &format!("no opcode has low quartet = 0x{:X}", lo));
+
+            },
+
+            _ => {
+                log_error("dispatch_opcode", "high-quartet above 0xF should not be possible");
+            }
+        }
+        log_info(tag, &format!("mode is {:?}", mode));
+
+        match opcode {
+            _ => {
+                println!("opcode 0x{:X} not recognized", opcode);
+            }
+        }
+
+
+        return Ok(());
+
     }
 }
 
