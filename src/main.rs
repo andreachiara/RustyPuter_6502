@@ -109,8 +109,8 @@ enum AddressingModes {
     AbsoluteX,
     AbsoluteY,
     Indirect,
-    IndexedIndirect,
-    IndirectIndexed,
+    XInd,
+    IndY,
 
     _INVALID
 }
@@ -172,6 +172,7 @@ enum InstructionNames {
     TXA, //    transfer X to accumulator
     TXS, //    transfer X to stack pointer
     TYA, //    transfer Y to accumulator
+    ILLEGAL, // invalid instruction
 }
 
 struct ADDRESSER {
@@ -294,10 +295,10 @@ impl ADDRESSER {
             AddressingModes::Indirect => {
                 self.indirect();
             },
-            AddressingModes::IndexedIndirect => {
+            AddressingModes::XInd => {
                 self.indexed_indirect();
             },
-            AddressingModes::IndirectIndexed => {
+            AddressingModes::IndY => {
                 self.indirect_indexed();
             },
             AddressingModes::_INVALID => {
@@ -374,10 +375,10 @@ impl ADDRESSER {
             AddressingModes::Indirect => {
                 self.bytes_to_pull = 1;
             },
-            AddressingModes::IndexedIndirect => {
+            AddressingModes::XInd => {
                 self.bytes_to_pull = 1;
             },
-            AddressingModes::IndirectIndexed => {
+            AddressingModes::IndY => {
                 self.bytes_to_pull = 1;
             },
             AddressingModes::_INVALID => {
@@ -396,6 +397,7 @@ impl ADDRESSER {
 
 
 }
+
 
 struct Cpu6502 {
     pc: u16, //program counter
@@ -449,179 +451,82 @@ impl Cpu6502 {
 
         match lo {
             0x0 => {
-                match hi {
-                    0x0 => {
-
-                    },
-                    0x1 => {
-
-                    },
-                    0x2 => {
-
-
-                    },
-                    0x3 => {
-
-
-                    },
-                    0x4 => {
-
-
-                    },
-                    0x5 => {
-
-
-                    },
-                    0x6 => {
-
-
-                    },
-                    0x7 => {
-
-
-                    },
-                    0x8 => {
-
-
-                    },
-                    0x9 => {
-
-
-                    },
-                    0xA => {
-
-
-                    },
-                    0xB => {
-
-
-                    },
-                    0xC => {
-
-                    },
-                    0xD => {
-
-
-                    },
-                    0xE => {
-
-
-                    },
-                    0xF => {
-
-
-                    },
-
-                    _ => {
-                        log_error(tag, "high-quartet above 0xF should not be possible");
-                    }
+                if even_hi && hi < 0x8{
+                    mode = AddressingModes::Implicit;
+                } else if even_hi {
+                    mode = AddressingModes::Immediate;
+                }else {
+                    mode = AddressingModes::Relative;
                 }
+                if hi == 2 { //special cases yay
+                    mode = AddressingModes::Absolute;
+                }
+
             },
             0x1 => {
                 if even_hi {
-                    mode = AddressingModes::IndexedIndirect;
-                } else {
-                    mode = AddressingModes::IndirectIndexed;
+                    mode = AddressingModes::XInd;
+                }else {
+                    mode = AddressingModes::IndY;
                 }
             },
             0x2 => {
                 mode = AddressingModes::Immediate;
-
             },
-            0x3 => {
-                log_error(tag, &format!("no opcode has low quartet = 0x{:X}", lo));
-
-            },
-            0x4 => {
+            0x4..=0x6 => {
                 if even_hi {
-                    mode = AddressingModes::ZeroPage
-                } else {
-                    mode = AddressingModes::ZeroPageX
+                    mode = AddressingModes::ZeroPage;
+                }else {
+                    mode = AddressingModes::ZeroPageX;
                 }
 
-            },
-            0x5 => {
-                if even_hi {
-                    mode = AddressingModes::ZeroPage
-                } else {
-                    mode = AddressingModes::ZeroPageX
+                if opcode == 0x96 || opcode == 0xB6 {
+                    mode = AddressingModes::ZeroPageY;
                 }
-
-            },
-            0x6 => {
-                if even_hi {
-                    mode = AddressingModes::ZeroPage
-                } else {
-                    mode = AddressingModes::ZeroPageX
-                } //TODO: 9- and B- have ZeroPageY to be handled in inner match
-
-            },
-            0x7 => {
-                log_error(tag, &format!("no opcode has low quartet = 0x{:X}", lo));
-
             },
             0x8 => {
                 mode = AddressingModes::Implicit;
-
             },
             0x9 => {
                 if even_hi {
-                    mode = AddressingModes::Immediate
-                } else {
-                    mode = AddressingModes::AbsoluteY
+                    mode = AddressingModes::Immediate;
+                }else {
+                    mode = AddressingModes::AbsoluteY;
                 }
-
             },
             0xA => {
-                if hi <=6 {
-                    mode = AddressingModes::Accumulator
+                if hi < 8 {
+                    mode = AddressingModes::Accumulator;
                 } else {
-                    mode = AddressingModes::Implicit
+                    mode = AddressingModes::Implicit;
                 }
-
-            },
-            0xB => {
-                log_error(tag, &format!("no opcode has low quartet = 0x{:X}", lo));
-
-            },
+            }
             0xC => {
                 mode = AddressingModes::Absolute;
-                //TODO: 6C is indirect, BC is AbsX
 
+                if opcode == 0x6C {
+                    mode = AddressingModes::Indirect;
+                }
+                if opcode == 0xBC {
+                    mode = AddressingModes::AbsoluteX;
+                }
             },
-            0xD => {
+            0xD..=0xE => {
                 if even_hi {
-                    mode = AddressingModes::Absolute
-                } else {
-                    mode = AddressingModes::AbsoluteX
+                    mode = AddressingModes::Absolute;
+                }else {
+                    mode = AddressingModes::AbsoluteX;
                 }
 
-            },
-            0xE => {
-                if even_hi {
-                    mode = AddressingModes::Absolute
-                } else {
-                    mode = AddressingModes::AbsoluteX
+                if opcode == 0xBE {
+                    mode = AddressingModes::AbsoluteY;
                 }
-
             },
-            0xF => {
-                log_error(tag, &format!("no opcode has low quartet = 0x{:X}", lo));
-
-            },
-
             _ => {
-                log_error("dispatch_opcode", "high-quartet above 0xF should not be possible");
+                log_error(tag, &format!("Illegal low quartet! 0x{:x}", lo ));
             }
-        }
-        log_info(tag, &format!("mode is {:?}", mode));
 
-        match opcode {
-            _ => {
-                println!("opcode 0x{:X} not recognized", opcode);
-            }
         }
-
 
         return Ok(());
 
