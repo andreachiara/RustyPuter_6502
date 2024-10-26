@@ -1,5 +1,6 @@
 use core::num;
 use std::ops::Add;
+use std::ptr::addr_eq;
 use std::{any::type_name, io};
 use std::collections::HashMap;
 
@@ -434,7 +435,79 @@ impl Cpu6502 {
     }
 
 
+    fn get_addr_mode(&mut self) -> Result<AddressingModes, io::Error> {
+        let tag = "dispatch_opcodes";
 
+        let opcode = self.addresser.deref_byte(self.pc as usize)?;
+
+        let hi = opcode >> 4;
+        let lo = opcode & 0xF;
+
+        let lo_group = lo >> 2;
+        let hi_group = hi >> 3;
+
+        let lo_even = lo % 2 == 0;
+        let hi_even = hi % 2 == 0;
+
+        match lo_group {
+            0x0..=0x3 => {
+                if opcode == 0x20 {
+                    return Ok(AddressingModes::Absolute);
+                }
+
+                if !lo_even {
+                    if hi_even {
+                        return Ok(AddressingModes::XInd);
+                    } else {
+                        return Ok(AddressingModes::IndY);
+                    }
+                }
+
+                if !hi_even {
+                    return Ok(AddressingModes::Relative);
+                }
+
+                if hi_group == 0 {
+                    return Ok(AddressingModes::Implicit);
+                } else {
+                    return Ok(AddressingModes::Immediate);
+                }
+            },
+            0x4..=0x7 => {
+                if hi_even {
+                    return Ok(AddressingModes::ZeroPage);
+                }
+                if hi_group == 0 {
+                    return Ok(AddressingModes::ZeroPageX);
+                }
+                return Ok(AddressingModes::ZeroPageY);
+            },
+            0x8..=0xB => {
+                if lo_even && lo != 0xA {
+                    return Ok(AddressingModes::Implicit);
+                } else if lo_even {
+                    return Ok(AddressingModes::Accumulator);
+                }else if hi_even {
+                    return Ok(AddressingModes::Immediate);
+                } else {
+                    return Ok(AddressingModes::AbsoluteY);
+                }
+            },
+            0xC..=0xF => {
+                if hi_even {
+                    return Ok(AddressingModes::Absolute);
+                } else {
+                    return Ok(AddressingModes::AbsoluteX);
+                }
+            },
+            _ => {
+                log_error(tag, "quartet cannot be greater than 0xF");
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "logic error"));
+            }
+
+        }
+
+    }
 
 
     fn dispatch_opcodes(&mut self) -> Result<(), io::Error> {
@@ -447,83 +520,38 @@ impl Cpu6502 {
         let lo = opcode & 0xF;
         let even_hi = hi % 2 == 0;
 
+        let lo_group = lo >> 2;
+        let hi_group = hi >> 3;
+
+        let lo_even = lo % 2 == 0;
+        let hi_even = hi % 2 == 0;
+
+
         let mut mode: AddressingModes = AddressingModes::Implicit;
 
-        match lo {
-            0x0 => {
-                if even_hi && hi < 0x8{
-                    mode = AddressingModes::Implicit;
-                } else if even_hi {
-                    mode = AddressingModes::Immediate;
-                }else {
-                    mode = AddressingModes::Relative;
-                }
-                if hi == 2 { //special cases yay
-                    mode = AddressingModes::Absolute;
-                }
-
-            },
-            0x1 => {
-                if even_hi {
-                    mode = AddressingModes::XInd;
-                }else {
-                    mode = AddressingModes::IndY;
-                }
-            },
-            0x2 => {
-                mode = AddressingModes::Immediate;
-            },
-            0x4..=0x6 => {
-                if even_hi {
-                    mode = AddressingModes::ZeroPage;
-                }else {
-                    mode = AddressingModes::ZeroPageX;
-                }
-
-                if opcode == 0x96 || opcode == 0xB6 {
-                    mode = AddressingModes::ZeroPageY;
-                }
-            },
-            0x8 => {
-                mode = AddressingModes::Implicit;
-            },
-            0x9 => {
-                if even_hi {
-                    mode = AddressingModes::Immediate;
-                }else {
-                    mode = AddressingModes::AbsoluteY;
-                }
-            },
-            0xA => {
-                if hi < 8 {
-                    mode = AddressingModes::Accumulator;
+        match lo_group {
+            0x0..=0x3 => {
+                if !lo_even {
+                    if hi_even {
+                        mode = AddressingModes::XInd;
+                    } else {
+                        mode = AddressingModes::IndY;
+                    }
                 } else {
-                    mode = AddressingModes::Implicit;
-                }
-            }
-            0xC => {
-                mode = AddressingModes::Absolute;
 
-                if opcode == 0x6C {
-                    mode = AddressingModes::Indirect;
-                }
-                if opcode == 0xBC {
-                    mode = AddressingModes::AbsoluteX;
                 }
             },
-            0xD..=0xE => {
-                if even_hi {
-                    mode = AddressingModes::Absolute;
-                }else {
-                    mode = AddressingModes::AbsoluteX;
-                }
+            0x4..=0x7 => {
 
-                if opcode == 0xBE {
-                    mode = AddressingModes::AbsoluteY;
-                }
+            },
+            0x8..=0xB => {
+
+            },
+            0xC..=0xF => {
+
             },
             _ => {
-                log_error(tag, &format!("Illegal low quartet! 0x{:x}", lo ));
+                log_error(tag, "quartet cannot be greater than 0xF");
             }
 
         }
