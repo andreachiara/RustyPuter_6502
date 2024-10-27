@@ -9,12 +9,12 @@ struct Endpoint {
     begin: usize,
     size: usize,
     data: [u8; MAX_BUS_SIZE],
-    read_cb: Box<dyn Fn(usize) -> u8>,
-    write_cb: Box<dyn Fn(usize, u8)>
+    read_cb: fn(usize) -> u8,
+    write_cb: fn(usize, u8)
 }
 
 impl Endpoint {
-    fn new(begin: usize, size: usize, read_cb: Box<dyn Fn(usize)->u8>, write_cb: Box<dyn Fn(usize, u8)>) -> Endpoint {
+    fn new(begin: usize, size: usize, read_cb: fn(usize)->u8, write_cb: fn(usize, u8)) -> Endpoint {
         let new_ep = Endpoint {
             begin: begin,
             size: size,
